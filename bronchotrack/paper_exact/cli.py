@@ -221,6 +221,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "Clamped to a branch's own length if it's shorter than this.",
     )
     p.add_argument(
+        "--dynamic-virtual-advance",
+        action="store_true",
+        help="Airway association: instead of the fixed --virtual-advance-mm "
+        "constant, derive the virtual viewpoint distance fresh at every "
+        "bifurcation from that parent branch's own diameter and depth -- "
+        "half the parent's diameter at the bifurcation as a base, "
+        "compounded by --virtual-advance-growth-per-generation for every "
+        "generation deeper the bifurcation sits (default +10%% per "
+        "generation). NOT part of the paper -- see association.py module "
+        "docstring's 'Dynamic virtual advance' section.",
+    )
+    p.add_argument(
+        "--virtual-advance-base-fraction",
+        type=float,
+        default=0.5,
+        help="Only with --dynamic-virtual-advance: fraction of the parent's "
+        "diameter (at the bifurcation) used as the base virtual-advance "
+        "distance before per-generation growth is applied (default: 0.5, "
+        "i.e. half the diameter).",
+    )
+    p.add_argument(
+        "--virtual-advance-growth-per-generation",
+        type=float,
+        default=0.10,
+        help="Only with --dynamic-virtual-advance: fractional growth "
+        "compounded once per generation deeper a bifurcation sits (default: "
+        "0.10 = +10%% per generation, compounding -- e.g. generation 2 gets "
+        "x1.21).",
+    )
+    p.add_argument(
         "--virtual-match-threshold",
         type=float,
         default=0.75,
@@ -361,6 +391,9 @@ def main(argv=None) -> int:
             "angle_threshold_deg": args.angle_threshold_deg,
             "distance_diameter_weight": args.distance_diameter_weight,
             "virtual_advance_mm": args.virtual_advance_mm,
+            "dynamic_virtual_advance": args.dynamic_virtual_advance,
+            "virtual_advance_base_fraction": args.virtual_advance_base_fraction,
+            "virtual_advance_growth_per_generation": args.virtual_advance_growth_per_generation,
             "virtual_match_threshold": args.virtual_match_threshold,
             "reacquire_max_gap_frames": args.reacquire_max_gap_frames,
             "continuous_verification": args.continuous_verification,

@@ -144,6 +144,32 @@ it -- the model already knows what's there directly. (Clamped to the
 branch's own length if `virtual_advance_mm` would run past its own next
 bifurcation.)
 
+Dynamic virtual advance (NOT in the paper -- opt-in, off by default)
+-----------------------------------------------------------------------
+`virtual_advance_mm` is normally one fixed constant for the whole video.
+`dynamic_virtual_advance=True` instead derives it fresh at *every*
+bifurcation from that parent branch's own geometry, on the reasoning that
+"a couple of centimetres" is itself scaled to an adult central airway --
+a wide proximal fork (trachea/mainstem) and a narrow, deep one (5th/6th
+generation) don't call for the same physical advance distance before a
+child's opening reads clearly, and the tree narrows the deeper it goes:
+
+    virtual_advance_mm(parent) = virtual_advance_base_fraction
+                                  * (2 * parent.radius_at_end)
+                                  * (1 + virtual_advance_growth_per_generation)
+                                    ** parent.generation
+
+i.e. "half the parent's diameter at the bifurcation" as the base distance
+(`virtual_advance_base_fraction=0.5`, matching `2 * radius_at_end`'s own
+half), then an additional `virtual_advance_growth_per_generation` (default
+0.10 = 10%) compounded once per generation deeper the bifurcation itself
+sits (trachea, generation 0, gets no boost at all; the first bifurcation
+below it, generation 1, gets x1.1; the next, generation 2, gets x1.21;
+and so on). Still clamped to the child branch's own length exactly as the
+fixed-constant mode is. Falls back to the plain fixed `virtual_advance_mm`
+for any branch with no radius data at its bifurcation end
+(`radius_at_end is None`).
+
 Critically, `graph_diameter` is NOT that branch's true, straight-on
 cross-sectional diameter -- it's foreshortening-corrected. A real detected
 mask is never the true cross-section either: the near airway wall
@@ -464,6 +490,9 @@ DEFAULT_MAX_MATCH_COST = 0.6  # paper does not give an exact number; kept as a p
 DEFAULT_DISTANCE_DIAMETER_WEIGHT = 0.4  # 0 = bearing-only (strict paper), see docstring
 DEFAULT_DIAMETER_LOOKAHEAD_FRACTION = 0.15
 DEFAULT_VIRTUAL_ADVANCE_MM = 20.0  # "a couple of centimetres past the bifurcation", see docstring
+DEFAULT_DYNAMIC_VIRTUAL_ADVANCE = False  # opt-in: derive virtual_advance_mm per-bifurcation instead
+DEFAULT_VIRTUAL_ADVANCE_BASE_FRACTION = 0.5  # "half the parent's diameter" at the bifurcation
+DEFAULT_VIRTUAL_ADVANCE_GROWTH_PER_GENERATION = 0.10  # +10%, compounding, per generation deeper
 DEFAULT_VIRTUAL_MATCH_THRESHOLD = 0.75  # min(ratio)/max(ratio) needed to call it a match
 DEFAULT_REACQUIRE_MAX_GAP_FRAMES = 90  # ~3s at 30fps; 0 disables re-acquisition entirely
 DEFAULT_REACQUIRE_IOU_THRESHOLD = 0.3  # min IoU against the frozen snapshot to call it "the same lumen"
@@ -483,6 +512,9 @@ class AirwayAssociation:
         containment_tol: float = 2.0,
         distance_diameter_weight: float = DEFAULT_DISTANCE_DIAMETER_WEIGHT,
         virtual_advance_mm: float = DEFAULT_VIRTUAL_ADVANCE_MM,
+        dynamic_virtual_advance: bool = DEFAULT_DYNAMIC_VIRTUAL_ADVANCE,
+        virtual_advance_base_fraction: float = DEFAULT_VIRTUAL_ADVANCE_BASE_FRACTION,
+        virtual_advance_growth_per_generation: float = DEFAULT_VIRTUAL_ADVANCE_GROWTH_PER_GENERATION,
         virtual_match_threshold: float = DEFAULT_VIRTUAL_MATCH_THRESHOLD,
         reacquire_max_gap_frames: int = DEFAULT_REACQUIRE_MAX_GAP_FRAMES,
         reacquire_iou_threshold: float = DEFAULT_REACQUIRE_IOU_THRESHOLD,
@@ -496,6 +528,9 @@ class AirwayAssociation:
         self.containment_tol = containment_tol
         self.distance_diameter_weight = distance_diameter_weight
         self.virtual_advance_mm = virtual_advance_mm
+        self.dynamic_virtual_advance = dynamic_virtual_advance
+        self.virtual_advance_base_fraction = virtual_advance_base_fraction
+        self.virtual_advance_growth_per_generation = virtual_advance_growth_per_generation
         self.virtual_match_threshold = virtual_match_threshold
         self.reacquire_max_gap_frames = reacquire_max_gap_frames
         self.reacquire_iou_threshold = reacquire_iou_threshold
@@ -1026,7 +1061,9 @@ class AirwayAssociation:
         if not valid.any():
             return None
 
-        virtual_pts = self.graph.project_children_at_distance(ref_label, self.virtual_advance_mm)
+        virtual_pts = self.graph.project_children_at_distance(
+            ref_label, self._virtual_advance_mm_for(ref_label)
+        )
         graph_pts = np.stack(
             [virtual_pts.get(l, np.zeros(2)) for l in labels], axis=0
         )  # (n_labels, 2) -- the "virtual viewpoint" 2D positions, see docstring
@@ -1123,6 +1160,22 @@ class AirwayAssociation:
                 del self._ratio_filters[track_id]
                 self._ratio_filters_updated_frame.pop(track_id, None)
 
+    def _virtual_advance_mm_for(self, ref_label: str) -> float:
+        """The mm distance past `ref_label`'s own bifurcation to sample the
+        virtual viewpoint at -- either the fixed `self.virtual_advance_mm`
+        constant (default), or, if `self.dynamic_virtual_advance` is set,
+        derived per-bifurcation from `ref_label`'s own diameter and depth
+        in the tree -- see module docstring's "Dynamic virtual advance"
+        section for the formula and reasoning."""
+        if not self.dynamic_virtual_advance:
+            return self.virtual_advance_mm
+        node = self.graph.nodes.get(ref_label)
+        if node is None or node.radius_at_end is None:
+            return self.virtual_advance_mm
+        base = self.virtual_advance_base_fraction * (2.0 * node.radius_at_end)
+        growth = (1.0 + self.virtual_advance_growth_per_generation) ** node.generation
+        return base * growth
+
     def _candidate_diameter(self, ref_label: str, label: str) -> float:
         """Expected *apparent* diameter for `label`'s branch as seen from
         `ref_label`'s own bifurcation, at the virtual viewpoint
@@ -1136,7 +1189,9 @@ class AirwayAssociation:
         real, foreshortened measurement against an idealized true diameter
         would read as a mismatch even when the tracking is correct). NaN
         if the graph has no radius data at all for this branch."""
-        d = self.graph.child_apparent_diameter_at_distance(ref_label, label, self.virtual_advance_mm)
+        d = self.graph.child_apparent_diameter_at_distance(
+            ref_label, label, self._virtual_advance_mm_for(ref_label)
+        )
         return d if d is not None else float("nan")
 
     # ------------------------------------------------------------------

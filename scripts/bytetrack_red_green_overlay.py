@@ -178,6 +178,30 @@ def main(argv=None) -> int:
         "bifurcation itself.",
     )
     p.add_argument(
+        "--dynamic-virtual-advance",
+        action="store_true",
+        help="AirwayAssociation's dynamic_virtual_advance -- instead of the "
+        "fixed --virtual-advance-mm constant, derive the virtual viewpoint "
+        "distance per-bifurcation as half the parent's own diameter, "
+        "compounded +10%% per generation deeper (see association.py "
+        "module docstring's 'Dynamic virtual advance' section).",
+    )
+    p.add_argument(
+        "--virtual-advance-base-fraction",
+        type=float,
+        default=0.5,
+        help="Only with --dynamic-virtual-advance: fraction of the "
+        "parent's diameter used as the base virtual-advance distance "
+        "(default 0.5).",
+    )
+    p.add_argument(
+        "--virtual-advance-growth-per-generation",
+        type=float,
+        default=0.10,
+        help="Only with --dynamic-virtual-advance: compounding growth per "
+        "generation deeper (default 0.10 = +10%%).",
+    )
+    p.add_argument(
         "--continuous-verification",
         dest="continuous_verification",
         action="store_true",
@@ -213,6 +237,9 @@ def main(argv=None) -> int:
             "virtual_match_threshold": args.virtual_match_threshold,
             "max_match_cost": args.max_match_cost,
             "virtual_advance_mm": args.virtual_advance_mm,
+            "dynamic_virtual_advance": args.dynamic_virtual_advance,
+            "virtual_advance_base_fraction": args.virtual_advance_base_fraction,
+            "virtual_advance_growth_per_generation": args.virtual_advance_growth_per_generation,
             "continuous_verification": args.continuous_verification,
         },
     )
