@@ -1,0 +1,13 @@
+# Core (required for graph / tracking / association / localization logic)
+numpy>=1.23
+scipy>=1.9
+opencv-python>=4.7
+
+# Lumen detection (bronchotrack/detection.py) -- your trained YOLOv11 weights
+ultralytics>=8.3
+
+# Appearance Re-ID (bronchotrack/reid.py) -- optional, only needed if you
+# enable Re-ID appearance matching (recommended for robustness, per the
+# paper's hybrid motion+appearance tracker)
+torch>=2.0
+torchvision>=0.15

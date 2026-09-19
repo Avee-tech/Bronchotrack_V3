@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    { "label": "trachea", "generation": 0, "parent": null,   "start": [0, 0, 0],    "end": [0, 30, 0] },
+    { "label": "LMB",     "generation": 1, "parent": "trachea", "start": [0, 30, 0],  "end": [-15, 55, 8] },
+    { "label": "RMB",     "generation": 1, "parent": "trachea", "start": [0, 30, 0],  "end": [15, 55, -8] },
+    { "label": "LUL",     "generation": 2, "parent": "LMB",     "start": [-15, 55, 8], "end": [-28, 70, 20] },
+    { "label": "LLL",     "generation": 2, "parent": "LMB",     "start": [-15, 55, 8], "end": [-20, 85, -5] },
+    { "label": "RUL",     "generation": 2, "parent": "RMB",     "start": [15, 55, -8], "end": [30, 65, -25] },
+    { "label": "BI",      "generation": 2, "parent": "RMB",     "start": [15, 55, -8], "end": [18, 80, -10] },
+    { "label": "RML",     "generation": 3, "parent": "BI",      "start": [18, 80, -10], "end": [28, 95, -2] },
+    { "label": "RLL",     "generation": 3, "parent": "BI",      "start": [18, 80, -10], "end": [22, 105, -20] }
+  ]
+}

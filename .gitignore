@@ -1,0 +1,14 @@
+# Large/regenerable binary artifacts -- not tracked so the repo stays code-focused
+out/
+weights/*.pt
+runs/
+inputs/*.mp4
+sweep_out/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS/editor cruft
+.DS_Store
