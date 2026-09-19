@@ -73,7 +73,10 @@ class BronchoTrackPipeline:
 
         # 2. Multi-lumen tracking (motion + appearance, two-stage BYTE-style)
         active_tracklets = self.tracker.update(
-            detections, frame_idx, eligibility_fn=self.association.eligibility_fn
+            detections,
+            frame_idx,
+            eligibility_fn=self.association.eligibility_fn,
+            frame_bgr=frame_bgr,
         )
 
         # 3. Airway association: label propagation from graph (roll-corrected)

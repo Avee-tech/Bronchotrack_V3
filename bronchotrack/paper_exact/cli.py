@@ -162,6 +162,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "appearance matching is disabled (motion-only tracking, i.e. "
         "combined cost C falls back to C_m).",
     )
+    p.add_argument(
+        "--tracker",
+        choices=["custom", "bytetrack"],
+        default="custom",
+        help="Which multi-lumen tracker produces the tracklets that feed "
+        "everything downstream (airway association's max-diameter/"
+        "diameter:distance matching, Eq. 8 localization voting -- neither "
+        "cares which tracker produced a Tracklet, see association.py). "
+        "'custom' (default): this project's own two-stage BYTE-style "
+        "Kalman+Re-ID tracker (tracker.py). 'bytetrack': BoxMOT's "
+        "ByteTrack instead, motion-only, no Re-ID/eligibility filtering -- "
+        "see paper_exact/boxmot_adapter.py's module docstring for exactly "
+        "what differs and why (requires `pip install boxmot`).",
+    )
 
     p.add_argument("--out-video", default=None, help="Optional path to write an annotated overlay video")
     p.add_argument("--out-json", default=None, help="Optional path to write a per-frame localization JSON log")
@@ -303,10 +317,27 @@ def main(argv=None) -> int:
         reid_embedder.warm_up()
         print(f"Re-ID device: {describe_device(reid_embedder.device)}", file=sys.stderr)
 
+    tracker = None
+    if args.tracker == "bytetrack":
+        try:
+            from .boxmot_adapter import BoxMotByteTrackAdapter
+        except ImportError as e:
+            print(
+                f"error: --tracker bytetrack needs the 'boxmot' package "
+                f"installed (pip install boxmot): {e}",
+                file=sys.stderr,
+            )
+            return 1
+        tracker = BoxMotByteTrackAdapter()
+        print("Tracker: BoxMOT ByteTrack (--tracker bytetrack)", file=sys.stderr)
+    else:
+        print("Tracker: custom two-stage BYTE-style (default)", file=sys.stderr)
+
     pipeline = BronchoTrackPipeline(
         graph=graph,
         detector=detector,
         reid_embedder=reid_embedder,
+        tracker=tracker,
         association_kwargs={
             "max_match_cost": args.max_match_cost,
             "angle_threshold_deg": args.angle_threshold_deg,

@@ -965,6 +965,41 @@ def test_full_pipeline_smoke_no_ml():
     )
 
 
+def test_boxmot_adapter_never_spawns_track_from_low_confidence_detection():
+    """Regression test for a real false-positive found while A/B testing
+    BoxMOT's ByteTrack against the custom tracker on ModelV3_2.mp4: a
+    spurious low-confidence duplicate detection recurring frame after frame
+    must never be surfaced as its own Tracklet, matching tracker.py's own
+    rule (unmatched low-confidence detections are discarded, never spawn a
+    tracklet) -- see boxmot_adapter.py's module docstring for the full
+    story of how BoxMOT's own `min_hits` alone did NOT prevent this."""
+    try:
+        from bronchotrack.paper_exact.boxmot_adapter import BoxMotByteTrackAdapter
+    except ImportError:
+        print("[skip] test_boxmot_adapter_never_spawns_track_from_low_confidence_detection: boxmot not installed")
+        return
+
+    tracker = BoxMotByteTrackAdapter(track_thresh=0.1, high_conf_thresh=0.5)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    real_box = BBox.from_xyxy(100, 100, 200, 200)
+    spurious_box = BBox.from_xyxy(80, 60, 260, 240)
+
+    active = []
+    for frame_idx in range(6):
+        dets = [
+            Detection(bbox=real_box, confidence=0.69, frame_idx=frame_idx),
+            Detection(bbox=spurious_box, confidence=0.21, frame_idx=frame_idx),
+        ]
+        active = tracker.update(dets, frame_idx, frame_bgr=frame)
+
+    assert len(active) == 1, (
+        f"expected only the high-confidence detection to ever be surfaced "
+        f"as a Tracklet, got {len(active)}: "
+        f"{[(t.track_id, t.confidences[-1]) for t in active]}"
+    )
+    assert abs(active[0].confidences[-1] - 0.69) < 1e-6
+
+
 def _run_all():
     tests = [
         test_localizer_has_no_stickiness,
@@ -990,6 +1025,7 @@ def _run_all():
         test_reacquisition_disabled_when_max_gap_is_zero,
         test_reacquisition_virtual_anchor_matches_new_child_when_self_match_fails,
         test_full_pipeline_smoke_no_ml,
+        test_boxmot_adapter_never_spawns_track_from_low_confidence_detection,
     ]
     failures = 0
     for t in tests:

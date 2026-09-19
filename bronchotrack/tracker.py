@@ -79,7 +79,15 @@ class MultiLumenTracker:
         detections: List[Detection],
         frame_idx: int,
         eligibility_fn: Optional[EligibilityFn] = None,
+        frame_bgr: Optional[np.ndarray] = None,
     ) -> List[Tracklet]:
+        # frame_bgr is accepted-and-ignored here so pipeline.py can pass the
+        # current frame to every tracker uniformly -- this Kalman+Re-ID
+        # tracker doesn't need raw pixels (Re-ID uses `Detection.embedding`,
+        # already computed from `Detection.crop` upstream), but a drop-in
+        # alternative tracker (e.g. an appearance-based external MOT
+        # library) may need the actual image. See
+        # `paper_exact/boxmot_adapter.py` for such a tracker.
         # 1. predict every existing tracklet forward one frame
         predicted_boxes: List[BBox] = []
         for t in self.tracklets:
