@@ -282,6 +282,52 @@ Opt-in via `continuous_verification` (constructor argument / CLI's
 original one-shot-only behavior exactly. No effect when
 `distance_diameter_weight <= 0` (cue disabled entirely).
 
+Cross-anchor sibling consistency (NOT in the paper -- opt-in, on by default)
+-----------------------------------------------------------------------------
+`process_frame` treats EVERY currently-visible labeled tracklet as its own
+independent anchor (see the `for anchor in anchors:` loop below) and lets
+each one propagate labels to its own still-unlabeled neighbors. That loop
+never re-examines a tracklet that already has a label -- so if two already-
+labeled tracklets are visible in the same frame, nothing ever checks that
+their labels are consistent WITH EACH OTHER. Diagnosed as a real,
+log-confirmed bug rather than a hypothetical: on a 1084-frame real-patient
+run, `R1` (a direct child of the right main bronchus, generation 2) stayed
+visible and labeled for well over 100 consecutive frames simultaneously
+with `R21` (generation 3, a grandchild reached via `R2`) -- two lumens that
+appeared side by side on screen (neither one's box contained the other),
+which can only mean they're candidate siblings at the SAME fork, yet
+`R1`'s parent is `R` and `R21`'s parent is `R2`: not siblings at all. The
+scope had clearly advanced past `R`'s own bifurcation into `R2`'s subtree;
+`R1`'s tracklet just never lost visual tracking, so its label -- assigned
+once, long before -- was never revisited even as the rest of the frame
+stopped supporting it.
+
+The fix, `_enforce_sibling_consistency`, runs every frame right after the
+per-anchor propagation loop, before `_continuous_verify`. For every pair of
+currently-visible labeled tracklets that are NOT spatially nested in one
+another (`_is_nested` in either direction -- an ancestor lumen containing
+its own visible child is normal and expected, exactly what
+`_propagate_from_anchor`'s own children/siblings split already assumes),
+their labels must be true graph siblings (`AirwayGraph.parent` agrees, or
+one is literally the other's parent for a not-yet-fully-nested detection
+right at a fork). A pair that fails this check is resolved by invalidating
+(unlabeling) whichever of the two is the more likely stale one --
+preferring to keep whichever currently has `diameter_distance_match ==
+True` (the one the 3D model actually agrees with right now), and falling
+back to keeping whichever was more recently (re)labeled when neither or
+both are verified. The invalidated tracklet goes back into next frame's
+unlabeled pool and gets a fresh chance to be relabeled correctly from
+whichever anchor is actually still valid, rather than persisting forever
+as a silently-wrong label.
+
+This is a pairwise, greedy resolution, not a global optimum over every
+currently-visible label at once -- deliberately: the paper doesn't specify
+any multi-label joint consistency step, and a full joint solve would add
+real complexity for a failure mode that, in practice, only ever involves
+one clearly-stale straggler at a time. Opt-in via `enforce_sibling_consistency`
+(constructor argument) -- set False to recover the exact original
+per-anchor-only propagation behavior.
+
 Re-acquisition after total anchor loss (NOT in the paper -- opt-in, on by default)
 -----------------------------------------------------------------------------------
 Label propagation above only ever runs from a currently-visible LABELED
@@ -441,6 +487,7 @@ class AirwayAssociation:
         reacquire_max_gap_frames: int = DEFAULT_REACQUIRE_MAX_GAP_FRAMES,
         reacquire_iou_threshold: float = DEFAULT_REACQUIRE_IOU_THRESHOLD,
         continuous_verification: bool = DEFAULT_CONTINUOUS_VERIFICATION,
+        enforce_sibling_consistency: bool = True,
     ):
         self.graph = graph
         self.max_generation_gap = max_generation_gap
@@ -453,6 +500,7 @@ class AirwayAssociation:
         self.reacquire_max_gap_frames = reacquire_max_gap_frames
         self.reacquire_iou_threshold = reacquire_iou_threshold
         self.continuous_verification = continuous_verification
+        self.enforce_sibling_consistency = enforce_sibling_consistency
 
         self.gallery: Dict[str, "GalleryEntry"] = {}
         self.current_location: str = graph.root()
@@ -514,6 +562,9 @@ class AirwayAssociation:
 
         for anchor in anchors:
             unlabeled = self._propagate_from_anchor(anchor, unlabeled, used_labels, frame_idx)
+
+        if self.enforce_sibling_consistency:
+            self._enforce_sibling_consistency(current, frame_idx)
 
         self._continuous_verify(current, frame_idx)
 
@@ -780,6 +831,75 @@ class AirwayAssociation:
             center = (inner.last_box.x_c, inner.last_box.y_c)
             return polygon_contains_point(outer.mask, center)
         return contains(outer.last_box, inner.last_box, tol=self.containment_tol)
+
+    def _are_graph_siblings(self, label_a: str, label_b: str) -> bool:
+        """True if `label_a`/`label_b` could plausibly be two DIFFERENT
+        branches visible side by side at the same fork: either they share a
+        parent (the ordinary case -- e.g. "R1"/"R2"), or one is literally
+        the other's parent (a detection right at a fork can briefly read as
+        not-quite-nested even though it's the very branch the other opens
+        into -- see `_is_nested`'s own note about mask/box imprecision).
+        Returns True (i.e. "not a conflict") for `label_a == label_b` too,
+        though callers don't currently hit that case since `used_labels`
+        already prevents two tracklets sharing one label."""
+        if label_a == label_b:
+            return True
+        if label_a not in self.graph or label_b not in self.graph:
+            return True  # nothing to check against
+        parent_a = self.graph.parent(label_a)
+        parent_b = self.graph.parent(label_b)
+        return parent_a == parent_b or label_a == parent_b or label_b == parent_a
+
+    def _pick_stale_label(self, a: Tracklet, b: Tracklet) -> Tracklet:
+        """Which of two mutually-inconsistent labeled tracklets to
+        invalidate, in `_enforce_sibling_consistency`. Prefers to keep
+        whichever the 3D model currently agrees with
+        (`diameter_distance_match`); when that doesn't distinguish them
+        (both/neither verified), keeps whichever was more recently
+        (re)labeled -- a label that's gone the longest without being
+        reassigned is the more likely stale straggler (see module
+        docstring's real example: `R1`, labeled long before the scope
+        advanced past `R`'s own fork, outliving its own validity while
+        `R21` got a fresh, currently-correct label)."""
+        if a.diameter_distance_match and not b.diameter_distance_match:
+            return b
+        if b.diameter_distance_match and not a.diameter_distance_match:
+            return a
+        a_frame = a.label_history[-1][0] if a.label_history else -1
+        b_frame = b.label_history[-1][0] if b.label_history else -1
+        return a if a_frame < b_frame else b
+
+    def _enforce_sibling_consistency(self, current: List[Tracklet], frame_idx: int) -> None:
+        """See module docstring's "Cross-anchor sibling consistency"
+        section. Runs once per frame, after every currently-visible
+        anchor has had its own chance to propagate labels to its
+        unlabeled neighbors -- this pass is the only place that ever
+        re-examines a tracklet that ALREADY has a label."""
+        labeled = [t for t in current if t.label is not None]
+        if len(labeled) < 2:
+            return
+        # oldest (most established) tracklets first is an arbitrary but
+        # stable iteration order -- which one within a conflicting pair
+        # gets kept is decided by `_pick_stale_label`, not by this order.
+        labeled.sort(key=lambda t: -t.age_frames)
+        invalidated: Set[int] = set()
+        for i in range(len(labeled)):
+            a = labeled[i]
+            if a.track_id in invalidated:
+                continue
+            for j in range(i + 1, len(labeled)):
+                b = labeled[j]
+                if b.track_id in invalidated:
+                    continue
+                if self._is_nested(a, b) or self._is_nested(b, a):
+                    continue  # an anchor and its own visible child -- expected
+                if self._are_graph_siblings(a.label, b.label):
+                    continue
+                loser = self._pick_stale_label(a, b)
+                loser.label = None
+                loser.label_history.append((frame_idx, None))
+                loser.diameter_distance_match = None
+                invalidated.add(loser.track_id)
 
     def _filtered_children(self, parent_label: str) -> List[str]:
         """Candidate children of `parent_label`, dropping branches whose

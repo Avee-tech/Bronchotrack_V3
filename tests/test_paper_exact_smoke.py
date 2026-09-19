@@ -1000,6 +1000,84 @@ def test_boxmot_adapter_never_spawns_track_from_low_confidence_detection():
     assert abs(active[0].confidences[-1] - 0.69) < 1e-6
 
 
+def test_sibling_consistency_invalidates_stale_cross_branch_label():
+    """Regression test for a real bug report: two labeled tracklets visible
+    side by side on screen (neither one's box nested in the other) but
+    belonging to different, non-sibling branches must not both keep their
+    labels -- one fork can't simultaneously show a level-2 and a level-3
+    label as if they were alternatives to each other. On a real 1084-frame
+    patient run, "R1" (generation 2, child of "R") stayed labeled for over
+    100 consecutive frames simultaneously with "R21" (generation 3, a
+    grandchild via "R2") -- see association.py's module docstring,
+    'Cross-anchor sibling consistency' section, for the full story. This
+    reproduces the same shape using the example graph's RUL (child of RMB)
+    / RML (child of BI, a different branch)."""
+    graph = AirwayGraph.from_json(EXAMPLE_GRAPH_PATH)
+    association = AirwayAssociation(graph)
+
+    stale = Tracklet(
+        track_id=1, ind_start=0, ind_end=99,
+        boxes=[BBox.from_xyxy(10, 10, 60, 60)],
+        confidences=[0.8], label="RUL",
+        label_history=[(0, "RUL")],
+        diameter_distance_match=None,
+        time_since_update=0,
+    )
+    fresh = Tracklet(
+        track_id=2, ind_start=95, ind_end=100,
+        boxes=[BBox.from_xyxy(400, 400, 450, 450)],
+        confidences=[0.8], label="RML",
+        label_history=[(100, "RML")],
+        diameter_distance_match=True,
+        time_since_update=0,
+    )
+
+    association._enforce_sibling_consistency([stale, fresh], frame_idx=100)
+
+    assert stale.label is None, "stale cross-branch label should have been invalidated"
+    assert stale.diameter_distance_match is None
+    assert fresh.label == "RML", "the currently-verified, more-recent label should survive"
+
+
+def test_sibling_consistency_leaves_real_siblings_and_nested_pairs_alone():
+    """No false positives: true graph siblings side by side, and a parent
+    nested around its own visible child, must both survive untouched."""
+    graph = AirwayGraph.from_json(EXAMPLE_GRAPH_PATH)
+    association = AirwayAssociation(graph)
+
+    # RUL / BI: true siblings (both children of RMB), side by side
+    a = Tracklet(
+        track_id=1, ind_start=0, ind_end=50,
+        boxes=[BBox.from_xyxy(10, 10, 60, 60)],
+        confidences=[0.8], label="RUL", label_history=[(0, "RUL")],
+        time_since_update=0,
+    )
+    b = Tracklet(
+        track_id=2, ind_start=0, ind_end=50,
+        boxes=[BBox.from_xyxy(200, 10, 260, 60)],
+        confidences=[0.8], label="BI", label_history=[(0, "BI")],
+        time_since_update=0,
+    )
+    association._enforce_sibling_consistency([a, b], frame_idx=50)
+    assert a.label == "RUL" and b.label == "BI"
+
+    # RMB nested around its own visible child RUL -- expected, not a conflict
+    parent = Tracklet(
+        track_id=3, ind_start=0, ind_end=50,
+        boxes=[BBox.from_xyxy(0, 0, 300, 300)],
+        confidences=[0.8], label="RMB", label_history=[(0, "RMB")],
+        time_since_update=0,
+    )
+    child = Tracklet(
+        track_id=4, ind_start=0, ind_end=50,
+        boxes=[BBox.from_xyxy(50, 50, 100, 100)],
+        confidences=[0.8], label="RUL", label_history=[(0, "RUL")],
+        time_since_update=0,
+    )
+    association._enforce_sibling_consistency([parent, child], frame_idx=50)
+    assert parent.label == "RMB" and child.label == "RUL"
+
+
 def _run_all():
     tests = [
         test_localizer_has_no_stickiness,
@@ -1026,6 +1104,8 @@ def _run_all():
         test_reacquisition_virtual_anchor_matches_new_child_when_self_match_fails,
         test_full_pipeline_smoke_no_ml,
         test_boxmot_adapter_never_spawns_track_from_low_confidence_detection,
+        test_sibling_consistency_invalidates_stale_cross_branch_label,
+        test_sibling_consistency_leaves_real_siblings_and_nested_pairs_alone,
     ]
     failures = 0
     for t in tests:

@@ -257,6 +257,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "of the paper -- see association.py module docstring's "
         "'Continuous (per-frame) re-verification' section.",
     )
+    p.add_argument(
+        "--no-sibling-consistency",
+        dest="enforce_sibling_consistency",
+        action="store_false",
+        default=True,
+        help="Airway association: by default, every frame checks that any "
+        "two currently-visible labeled tracklets which aren't nested "
+        "inside one another (i.e. appear side by side at the same fork) "
+        "share a real graph-sibling relationship -- e.g. two direct "
+        "children of the same branch, not one branch's child sitting "
+        "beside an unrelated, differently-generationed branch. A pair "
+        "that disagrees gets the more-likely-stale label invalidated so "
+        "it can be relabeled fresh, instead of both persisting "
+        "indefinitely. This flag disables that check and recovers the "
+        "original per-anchor-only propagation behavior. NOT part of the "
+        "paper -- see association.py module docstring's 'Cross-anchor "
+        "sibling consistency' section.",
+    )
 
     p.add_argument(
         "--show-graph",
@@ -346,6 +364,7 @@ def main(argv=None) -> int:
             "virtual_match_threshold": args.virtual_match_threshold,
             "reacquire_max_gap_frames": args.reacquire_max_gap_frames,
             "continuous_verification": args.continuous_verification,
+            "enforce_sibling_consistency": args.enforce_sibling_consistency,
         },
     )
 
