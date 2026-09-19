@@ -96,6 +96,17 @@ def main(argv=None) -> int:
         "become a red box in the first place; doesn't change the green "
         "(diameter:distance-verified) gate at all.",
     )
+    p.add_argument(
+        "--virtual-match-threshold",
+        type=float,
+        default=0.75,
+        help="AirwayAssociation's diameter:distance verification gate -- "
+        "how closely the image and graph normalized ratios must agree "
+        "(min/max) for Tracklet.diameter_distance_match to be True, i.e. "
+        "for a box to turn green (default 0.75, matching the CLI's own "
+        "default). Lower = looser agreement required = more red boxes "
+        "get promoted to green.",
+    )
     args = p.parse_args(argv)
 
     graph = AirwayGraph.from_path(args.graph)
@@ -104,7 +115,12 @@ def main(argv=None) -> int:
     print(f"Detector device: {describe_device(detector.device)}", file=sys.stderr)
 
     tracker = BoxMotByteTrackAdapter(high_conf_thresh=args.high_conf_thresh)
-    pipeline = BronchoTrackPipeline(graph=graph, detector=detector, tracker=tracker)
+    pipeline = BronchoTrackPipeline(
+        graph=graph,
+        detector=detector,
+        tracker=tracker,
+        association_kwargs={"virtual_match_threshold": args.virtual_match_threshold},
+    )
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     cap = cv2.VideoCapture(args.video)
