@@ -137,6 +137,62 @@ def main(argv=None) -> int:
         "default). Lower = looser agreement required = more red boxes "
         "get promoted to green.",
     )
+    p.add_argument(
+        "--track-buffer",
+        type=int,
+        default=30,
+        help="BoxMotByteTrackAdapter's track_buffer -- frames a lost "
+        "track is kept alive (as 'lost', not yet deleted) before being "
+        "dropped entirely (default 30, BoxMOT's own default). Higher = "
+        "tracks survive longer occlusion/dropout before a new ID is "
+        "spawned for the same physical lumen.",
+    )
+    p.add_argument(
+        "--min-hits",
+        type=int,
+        default=3,
+        help="BoxMotByteTrackAdapter's min_hits -- consecutive matched "
+        "frames a track must accumulate before it is reported to the "
+        "rest of the pipeline at all (default 3, BoxMOT's own default; "
+        "see boxmot_adapter.py's module docstring for why 1 was tried "
+        "and rejected on this video).",
+    )
+    p.add_argument(
+        "--max-match-cost",
+        type=float,
+        default=0.6,
+        help="AirwayAssociation's max_match_cost -- ceiling on the "
+        "bearing/angular assignment cost for a candidate label to be "
+        "accepted at all (default 0.6). Lower = stricter angular "
+        "agreement required before a label is assigned in the first "
+        "place, upstream of the diameter:distance (green) gate.",
+    )
+    p.add_argument(
+        "--virtual-advance-mm",
+        type=float,
+        default=20.0,
+        help="AirwayAssociation's virtual_advance_mm -- how far past "
+        "each bifurcation the 'virtual viewpoint' used for the "
+        "diameter:distance cue is projected (default 20.0mm). Smaller = "
+        "less foreshortening correction distance, closer to the "
+        "bifurcation itself.",
+    )
+    p.add_argument(
+        "--continuous-verification",
+        dest="continuous_verification",
+        action="store_true",
+        default=True,
+        help="AirwayAssociation's continuous_verification -- re-verify "
+        "diameter:distance every frame rather than once at initial "
+        "labeling (default True).",
+    )
+    p.add_argument(
+        "--no-continuous-verification",
+        dest="continuous_verification",
+        action="store_false",
+        help="Disable continuous_verification (verify once at initial "
+        "labeling only).",
+    )
     args = p.parse_args(argv)
 
     graph = AirwayGraph.from_path(args.graph)
@@ -144,12 +200,21 @@ def main(argv=None) -> int:
     detector.warm_up()
     print(f"Detector device: {describe_device(detector.device)}", file=sys.stderr)
 
-    tracker = BoxMotByteTrackAdapter(high_conf_thresh=args.high_conf_thresh)
+    tracker = BoxMotByteTrackAdapter(
+        high_conf_thresh=args.high_conf_thresh,
+        track_buffer=args.track_buffer,
+        min_hits=args.min_hits,
+    )
     pipeline = BronchoTrackPipeline(
         graph=graph,
         detector=detector,
         tracker=tracker,
-        association_kwargs={"virtual_match_threshold": args.virtual_match_threshold},
+        association_kwargs={
+            "virtual_match_threshold": args.virtual_match_threshold,
+            "max_match_cost": args.max_match_cost,
+            "virtual_advance_mm": args.virtual_advance_mm,
+            "continuous_verification": args.continuous_verification,
+        },
     )
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
