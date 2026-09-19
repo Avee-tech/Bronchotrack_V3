@@ -1,12 +1,27 @@
-"""One-off diagnostic overlay: EVERY box ByteTrack currently outputs, in
-red, with the subset that actually gets displayed in the normal overlay
-(diameter_distance_match is True -- see paper_exact/viz.py's "DISPLAY IS
-GATED..." docstring section) drawn again on top in green.
+"""One-off diagnostic overlay showing the whole funnel in one frame,
+three stages stacked in three colors:
+
+  YELLOW -- every RAW detection the YOLO detector itself produced this
+            frame (`FrameResult.detections`, before tracking touches
+            anything at all -- gated only by the detector's own
+            `--conf-threshold`, default 0.1). This is everything that
+            EXISTED, including boxes ByteTrack's own `high_conf_thresh`
+            gate discarded outright and that therefore never became a
+            tracked box (red) at all.
+  RED    -- every box ByteTrack currently outputs as an active Tracklet
+            (i.e. survived `high_conf_thresh` -- see boxmot_adapter.py).
+            A subset of yellow: everything red was first yellow, but not
+            everything yellow makes it to red.
+  GREEN  -- the subset of red that also passes diameter:distance
+            verification against the 3D model (`diameter_distance_match
+            is True` -- see paper_exact/viz.py's "DISPLAY IS GATED..."
+            docstring section); this is what the normal pipeline overlay
+            actually displays.
 
 Not part of the pipeline itself -- a debugging/inspection tool requested
-to show exactly how much the diameter:distance verification gate is
-throwing away vs. what BoxMOT's ByteTrack raw output looks like every
-frame, side by side in one video.
+to show exactly how much each successive filtering stage throws away,
+from raw detector output all the way down to what actually gets shown,
+side by side in one video.
 
 Usage:
     python3 scripts/bytetrack_red_green_overlay.py \\
@@ -32,6 +47,7 @@ from bronchotrack.utils import describe_device
 from bronchotrack.paper_exact.boxmot_adapter import BoxMotByteTrackAdapter
 from bronchotrack.paper_exact.pipeline import BronchoTrackPipeline
 
+YELLOW = (0, 220, 255)  # BGR
 RED = (0, 0, 255)      # BGR
 GREEN = (46, 204, 113)  # BGR -- same green as viz.py's palette entry 0
 WHITE = (255, 255, 255)
@@ -44,9 +60,22 @@ def draw_red_green(frame_bgr: np.ndarray, result) -> np.ndarray:
     displayed = [t for t in current if t.diameter_distance_match is True]
     displayed_ids = {t.track_id for t in displayed}
 
-    # Pass 1: every raw ByteTrack output this frame, in red -- drawn first
-    # so the green (displayed) boxes always draw on top and stay legible
-    # even where a red box and a green box coincide.
+    # Pass 0: EVERY raw detector output this frame, in yellow, drawn first
+    # (widest, most permissive stage -- every later color is drawn on top
+    # of it, so a box that's yellow+red+green just reads as green, exactly
+    # as intended: each color only needs to stand out where it DIFFERS
+    # from the next stage).
+    for d in result.detections:
+        x1, y1, x2, y2 = (int(round(v)) for v in d.bbox.xyxy)
+        cv2.rectangle(out, (x1, y1), (x2, y2), YELLOW, 1, cv2.LINE_AA)
+        cv2.putText(
+            out, f"{d.confidence:.2f}", (x1, min(out.shape[0] - 2, y2 + 14)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.38, YELLOW, 1, cv2.LINE_AA,
+        )
+
+    # Pass 1: every raw ByteTrack output this frame, in red -- drawn on
+    # top of yellow so the green (displayed) boxes always draw on top and
+    # stay legible even where a red box and a green box coincide.
     for t in current:
         x1, y1, x2, y2 = (int(round(v)) for v in t.last_box.xyxy)
         cv2.rectangle(out, (x1, y1), (x2, y2), RED, 1, cv2.LINE_AA)
@@ -70,7 +99,8 @@ def draw_red_green(frame_bgr: np.ndarray, result) -> np.ndarray:
     header = (
         f"loc: {result.location or '-'}{' (stale)' if is_stale else ''}  "
         f"gen: {result.generation if result.generation is not None else '-'}  |  "
-        f"red: all ByteTrack outputs ({len(current)})  "
+        f"yellow: raw detections ({len(result.detections)})  "
+        f"red: ByteTrack outputs ({len(current)})  "
         f"green: displayed ({len(displayed)})"
     )
     header_color = (0, 191, 255) if is_stale else WHITE
