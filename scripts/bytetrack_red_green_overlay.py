@@ -85,6 +85,17 @@ def main(argv=None) -> int:
     p.add_argument("--weights", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--max-frames", type=int, default=None)
+    p.add_argument(
+        "--high-conf-thresh",
+        type=float,
+        default=0.5,
+        help="BoxMotByteTrackAdapter's own gate: a NEW track_id is only "
+        "ever surfaced as a Tracklet at all the first time its own "
+        "detection confidence is at least this (default 0.5, matching "
+        "the class default). Lower = more raw detections get a chance to "
+        "become a red box in the first place; doesn't change the green "
+        "(diameter:distance-verified) gate at all.",
+    )
     args = p.parse_args(argv)
 
     graph = AirwayGraph.from_path(args.graph)
@@ -92,7 +103,7 @@ def main(argv=None) -> int:
     detector.warm_up()
     print(f"Detector device: {describe_device(detector.device)}", file=sys.stderr)
 
-    tracker = BoxMotByteTrackAdapter()
+    tracker = BoxMotByteTrackAdapter(high_conf_thresh=args.high_conf_thresh)
     pipeline = BronchoTrackPipeline(graph=graph, detector=detector, tracker=tracker)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
