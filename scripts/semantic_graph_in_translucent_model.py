@@ -42,6 +42,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from bronchotrack.graph import AirwayGraph
+from bronchotrack.paper_exact.association import AirwayAssociation
 
 TUBE_SIDES = 14
 TUBE_COLOR = "rgb(224, 172, 150)"  # translucent tissue tan
@@ -133,7 +134,7 @@ def tube_mesh_for_branch(centerline: np.ndarray, radius: np.ndarray, sides: int 
     return verts_flat, np.array(tris)
 
 
-def build_figure(graph: AirwayGraph, virtual_advance_mm: float) -> go.Figure:
+def build_figure(graph: AirwayGraph, assoc: AirwayAssociation) -> go.Figure:
     fig = go.Figure()
 
     # ---- Layer 1: translucent tube mesh, all branches combined into one
@@ -214,45 +215,64 @@ def build_figure(graph: AirwayGraph, virtual_advance_mm: float) -> go.Figure:
         )
     )
 
-    # ---- Layer 3: virtual-distance points ----
+    # ---- Layer 3: virtual-distance points -- one distance per bifurcation
+    # when assoc.dynamic_virtual_advance is on (see association.py's
+    # "_virtual_advance_mm_for": half the parent's diameter at the
+    # bifurcation, compounded by assoc.virtual_advance_growth_per_generation
+    # per generation deeper), or the same fixed distance everywhere
+    # otherwise -- both go through the exact same pipeline code path. ----
     vx, vy, vz, vtext = [], [], [], []
     for parent_label, parent in graph.nodes.items():
         if not parent.children:
             continue
-        proj = graph.project_children_at_distance(parent_label, virtual_advance_mm)
+        distance_mm = assoc._virtual_advance_mm_for(parent_label)
         for child_label in parent.children:
             child = graph.nodes[child_label]
             length = child.arc_length_mm()
-            t = 0.0 if length <= 1e-9 else min(virtual_advance_mm, length) / length
+            t = 0.0 if length <= 1e-9 else min(distance_mm, length) / length
             pt = child.point_at(t)
             true_r = child.radius_at(t)
-            apparent_d = graph.child_apparent_diameter_at_distance(parent_label, child_label, virtual_advance_mm)
+            apparent_d = graph.child_apparent_diameter_at_distance(parent_label, child_label, distance_mm)
             vx.append(pt[0]); vy.append(pt[1]); vz.append(pt[2])
-            clamped_note = " (clamped to branch end)" if virtual_advance_mm > length else ""
+            clamped_note = " (clamped to branch end)" if distance_mm > length else ""
+            parent_diam = 2 * parent.radius_at_end if parent.radius_at_end is not None else float("nan")
             vtext.append(
                 f"virtual viewpoint for {parent_label} → {child_label}<br>"
-                f"{min(virtual_advance_mm, length):.1f}mm down {child_label}'s centerline{clamped_note}<br>"
+                f"distance used: {distance_mm:.2f}mm "
+                f"({'dynamic: 0.5×parent Ø(' + f'{parent_diam:.2f}mm' + f')×1.1^gen{parent.generation}' if assoc.dynamic_virtual_advance else 'fixed'})<br>"
+                f"{min(distance_mm, length):.1f}mm down {child_label}'s centerline{clamped_note}<br>"
                 f"true radius here: {true_r:.2f}mm (Ø2 = {2*true_r:.2f}mm true diameter)<br>"
                 f"foreshortening-corrected apparent diameter: "
                 f"{apparent_d:.2f}mm" if apparent_d is not None else "apparent diameter: n/a"
             )
+    marker_name = (
+        "Virtual viewpoints (adaptive: 0.5×parent diameter, ×1.1 per generation)"
+        if assoc.dynamic_virtual_advance
+        else f"Virtual viewpoints ({assoc.virtual_advance_mm:g}mm past each bifurcation, fixed)"
+    )
     fig.add_trace(
         go.Scatter3d(
             x=vx, y=vy, z=vz,
             mode="markers",
             marker=dict(size=6, color=VIRTUAL_POINT_COLOR, symbol="diamond", line=dict(color="black", width=1)),
-            name=f"Virtual viewpoints ({virtual_advance_mm:g}mm past each bifurcation)",
+            name=marker_name,
             hovertext=vtext,
             hoverinfo="text",
         )
     )
 
+    title_sub = (
+        "adaptive virtual viewpoints: half the parent's diameter at each bifurcation, "
+        f"×1.1 compounded per generation deeper (base_fraction={assoc.virtual_advance_base_fraction:g}, "
+        f"growth={assoc.virtual_advance_growth_per_generation:g}/gen)"
+        if assoc.dynamic_virtual_advance
+        else f"virtual viewpoints marked at a fixed {assoc.virtual_advance_mm:g}mm past each bifurcation"
+    )
     fig.update_layout(
         title=dict(
             text=(
                 f"Semantic airway graph inside its translucent 3D model<br>"
-                f"<sub>virtual viewpoints marked at {virtual_advance_mm:g}mm past each bifurcation "
-                f"(current AirwayAssociation.virtual_advance_mm setting)</sub>"
+                f"<sub>{title_sub}</sub>"
             ),
         ),
         scene=dict(
@@ -272,11 +292,29 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--graph", required=True)
     p.add_argument("--virtual-advance-mm", type=float, default=30.0)
+    p.add_argument(
+        "--dynamic-virtual-advance",
+        action="store_true",
+        help="Mark each bifurcation's virtual viewpoint at half that "
+        "parent's own diameter, compounded by --virtual-advance-growth-"
+        "per-generation per generation deeper, instead of the fixed "
+        "--virtual-advance-mm distance everywhere (see association.py's "
+        "'Dynamic virtual advance' docstring section).",
+    )
+    p.add_argument("--virtual-advance-base-fraction", type=float, default=0.5)
+    p.add_argument("--virtual-advance-growth-per-generation", type=float, default=0.10)
     p.add_argument("--out", required=True)
     args = p.parse_args(argv)
 
     graph = AirwayGraph.from_path(args.graph)
-    fig = build_figure(graph, args.virtual_advance_mm)
+    assoc = AirwayAssociation(
+        graph,
+        virtual_advance_mm=args.virtual_advance_mm,
+        dynamic_virtual_advance=args.dynamic_virtual_advance,
+        virtual_advance_base_fraction=args.virtual_advance_base_fraction,
+        virtual_advance_growth_per_generation=args.virtual_advance_growth_per_generation,
+    )
+    fig = build_figure(graph, assoc)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     fig.write_html(args.out, include_plotlyjs=True, full_html=True)
