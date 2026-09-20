@@ -202,6 +202,16 @@ def main(argv=None) -> int:
         "generation deeper (default 0.10 = +10%%).",
     )
     p.add_argument(
+        "--no-foreshortening-correction",
+        dest="apply_foreshortening_correction",
+        action="store_false",
+        default=True,
+        help="Disable the cos(theta) foreshortening correction on the "
+        "graph-side expected diameter -- use the branch's true, "
+        "straight-on diameter at the virtual viewpoint unmodified "
+        "instead. Ablation flag; see association.py's _candidate_diameter.",
+    )
+    p.add_argument(
         "--continuous-verification",
         dest="continuous_verification",
         action="store_true",
@@ -241,6 +251,7 @@ def main(argv=None) -> int:
             "virtual_advance_base_fraction": args.virtual_advance_base_fraction,
             "virtual_advance_growth_per_generation": args.virtual_advance_growth_per_generation,
             "continuous_verification": args.continuous_verification,
+            "apply_foreshortening_correction": args.apply_foreshortening_correction,
         },
     )
 

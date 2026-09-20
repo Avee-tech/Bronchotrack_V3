@@ -274,6 +274,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "'Re-acquisition after total anchor loss' section).",
     )
     p.add_argument(
+        "--no-foreshortening-correction",
+        dest="apply_foreshortening_correction",
+        action="store_false",
+        default=True,
+        help="Airway association: by default, the graph-side expected "
+        "diameter used by the diameter:distance cue is corrected by "
+        "cos(theta), theta being the angle between the parent's forward "
+        "axis and the child branch's own local tangent at the virtual "
+        "viewpoint (a child seen edge-on reads smaller than head-on). "
+        "This flag disables that correction and uses the branch's true, "
+        "straight-on diameter unmodified instead -- an ablation flag, not "
+        "part of the paper, see association.py module docstring's "
+        "'The virtual viewpoint' section and _candidate_diameter.",
+    )
+    p.add_argument(
         "--no-continuous-verification",
         dest="continuous_verification",
         action="store_false",
@@ -397,6 +412,7 @@ def main(argv=None) -> int:
             "virtual_match_threshold": args.virtual_match_threshold,
             "reacquire_max_gap_frames": args.reacquire_max_gap_frames,
             "continuous_verification": args.continuous_verification,
+            "apply_foreshortening_correction": args.apply_foreshortening_correction,
             "enforce_sibling_consistency": args.enforce_sibling_consistency,
         },
     )

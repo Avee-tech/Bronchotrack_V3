@@ -497,6 +497,7 @@ DEFAULT_VIRTUAL_MATCH_THRESHOLD = 0.75  # min(ratio)/max(ratio) needed to call i
 DEFAULT_REACQUIRE_MAX_GAP_FRAMES = 90  # ~3s at 30fps; 0 disables re-acquisition entirely
 DEFAULT_REACQUIRE_IOU_THRESHOLD = 0.3  # min IoU against the frozen snapshot to call it "the same lumen"
 DEFAULT_CONTINUOUS_VERIFICATION = True  # re-verify every frame vs. once at initial labeling; see docstring
+DEFAULT_APPLY_FORESHORTENING_CORRECTION = True  # cos(theta) correction on the graph-side diameter; see docstring
 _LOG_RATIO_CAP = 2.0  # ~7.4x diameter:distance mismatch -> fully penalized
 _MIN_RATIO = 1e-3
 _MIN_DIST = 1e-6  # guard against divide-by-near-zero distance
@@ -519,6 +520,7 @@ class AirwayAssociation:
         reacquire_max_gap_frames: int = DEFAULT_REACQUIRE_MAX_GAP_FRAMES,
         reacquire_iou_threshold: float = DEFAULT_REACQUIRE_IOU_THRESHOLD,
         continuous_verification: bool = DEFAULT_CONTINUOUS_VERIFICATION,
+        apply_foreshortening_correction: bool = DEFAULT_APPLY_FORESHORTENING_CORRECTION,
         enforce_sibling_consistency: bool = True,
     ):
         self.graph = graph
@@ -535,6 +537,7 @@ class AirwayAssociation:
         self.reacquire_max_gap_frames = reacquire_max_gap_frames
         self.reacquire_iou_threshold = reacquire_iou_threshold
         self.continuous_verification = continuous_verification
+        self.apply_foreshortening_correction = apply_foreshortening_correction
         self.enforce_sibling_consistency = enforce_sibling_consistency
 
         self.gallery: Dict[str, "GalleryEntry"] = {}
@@ -1188,10 +1191,22 @@ class AirwayAssociation:
         partially occludes any child that isn't dead-ahead -- comparing a
         real, foreshortened measurement against an idealized true diameter
         would read as a mismatch even when the tracking is correct). NaN
-        if the graph has no radius data at all for this branch."""
-        d = self.graph.child_apparent_diameter_at_distance(
-            ref_label, label, self._virtual_advance_mm_for(ref_label)
-        )
+        if the graph has no radius data at all for this branch.
+
+        If `self.apply_foreshortening_correction` is False (NOT the
+        default -- an ablation flag), skips the cos(theta) correction
+        entirely and returns the branch's true, straight-on diameter at
+        the virtual viewpoint instead (`AirwayGraph.
+        child_radius_at_distance` x2) -- i.e. treats every child as if
+        seen dead-on regardless of how sharply it actually forks off the
+        parent. Useful for isolating how much the correction itself is
+        contributing to (or destabilizing) matching on a given video."""
+        distance_mm = self._virtual_advance_mm_for(ref_label)
+        if self.apply_foreshortening_correction:
+            d = self.graph.child_apparent_diameter_at_distance(ref_label, label, distance_mm)
+        else:
+            r = self.graph.child_radius_at_distance(label, distance_mm)
+            d = 2.0 * r if r is not None else None
         return d if d is not None else float("nan")
 
     # ------------------------------------------------------------------
